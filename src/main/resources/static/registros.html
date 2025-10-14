@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Gestión de Registros - PASES</title>
+
+  <!-- Bootstrap 5 CSS (CDN) -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <!-- Tailwind Play CDN (utilidades rápidas) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <style>
+    body { padding-top: 1.2rem; }
+    .modal { z-index: 2000; }
+    .small-muted { font-size: .85rem; color: #6c757d; }
+  </style>
+</head>
+<body class="bg-gray-50">
+
+<div class="container">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+      <h1 class="h3">Registros — Sistema PASES</h1>
+      <div class="small-muted">Crear, editar y borrar solicitudes de pase</div>
+    </div>
+    <div>
+      <button id="btnRefresh" class="btn btn-outline-secondary me-2">Refrescar</button>
+      <button id="btnNuevo" class="btn btn-primary">Nuevo Registro</button>
+    </div>
+  </div>
+
+  <div id="alerts"></div>
+
+  <div class="card shadow-sm">
+    <div class="card-body p-0">
+      <table class="table table-hover mb-0" id="registrosTable">
+        <thead class="table-light">
+          <tr>
+            <th>ID</th>
+            <th>Sistema</th>
+            <th>Módulo</th>
+            <th>Cambio</th>
+            <th>Programador</th>
+            <th>Fecha Solicitud</th>
+            <th>Estado</th>
+            <th>Responsable</th>
+            <th>Fecha Pase</th>
+            <th>Motivo</th>
+            <th>Activo</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="registrosTbody">
+          <!-- generadas por JS -->
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Crear/Editar Registro -->
+<div class="modal fade" id="registroModal" tabindex="-1" aria-labelledby="registroModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <form id="registroForm" class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="registroModalLabel">Nuevo Registro</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="registroId" />
+
+        <div class="row g-3">
+          <div class="col-md-4">
+            <label class="form-label">Sistema</label>
+            <select id="selSistema" class="form-select" required></select>
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">Módulo</label>
+            <select id="selModulo" class="form-select" required></select>
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">Estado</label>
+            <select id="selEstado" class="form-select" required></select>
+          </div>
+
+          <div class="col-12">
+            <label class="form-label">Cambio (descripción)</label>
+            <textarea id="txtCambio" class="form-control" rows="3" maxlength="400" required></textarea>
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">Programador</label>
+            <select id="selProgramador" class="form-select" required></select>
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">Responsable</label>
+            <select id="selResponsable" class="form-select" required></select>
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">Fecha Solicitud</label>
+            <input id="inputFechaSolicitud" type="datetime-local" class="form-control" required />
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">Fecha Pase (opcional)</label>
+            <input id="inputFechaPase" type="datetime-local" class="form-control" />
+            <div class="small-muted">Si lo dejas vacío se guardará null</div>
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">Motivo</label>
+            <select id="selMotivo" class="form-select" required></select>
+          </div>
+
+          <div class="col-12">
+            <label class="form-label">Detalle motivo</label>
+            <input id="txtDetalleMotivo" class="form-control" maxlength="300" />
+          </div>
+
+          <div class="col-md-2">
+            <label class="form-label">Activo</label>
+            <select id="selActivo" class="form-select">
+              <option value="1">Activo</option>
+              <option value="0">Inactivo</option>
+            </select>
+          </div>
+
+        </div>
+
+        <div id="formError" class="text-danger mt-2"></div>
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="submit" class="btn btn-primary" id="btnGuardarRegistro">Guardar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Bootstrap JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  // ================= CONFIG =================
+  const API_REGISTROS = '/registros';
+  const API_TIPADOS = '/tipados';
+  const API_USUARIOS = '/usuarios';
+
+  // Modal
+  const registroModalEl = document.getElementById('registroModal');
+  const registroModal = new bootstrap.Modal(registroModalEl);
+
+  // Elements
+  const registrosTbody = document.getElementById('registrosTbody');
+  const alerts = document.getElementById('alerts');
+
+  const form = document.getElementById('registroForm');
+  const inputId = document.getElementById('registroId');
+  const selSistema = document.getElementById('selSistema');
+  const selModulo = document.getElementById('selModulo');
+  const selEstado = document.getElementById('selEstado');
+  const txtCambio = document.getElementById('txtCambio');
+  const selProgramador = document.getElementById('selProgramador');
+  const selResponsable = document.getElementById('selResponsable');
+  const inputFechaSolicitud = document.getElementById('inputFechaSolicitud');
+  const inputFechaPase = document.getElementById('inputFechaPase');
+  const selMotivo = document.getElementById('selMotivo');
+  const txtDetalleMotivo = document.getElementById('txtDetalleMotivo');
+  const selActivo = document.getElementById('selActivo');
+  const formError = document.getElementById('formError');
+
+  document.getElementById('btnNuevo').addEventListener('click', openCreateForm);
+  document.getElementById('btnRefresh').addEventListener('click', loadRegistros);
+
+  // UTIL: alert
+  function showAlert(msg, type='success', ttl=4000) {
+    const id = 'a' + Date.now();
+    alerts.insertAdjacentHTML('beforeend', `
+      <div id="${id}" class="alert alert-${type} alert-dismissible fade show" role="alert">
+        ${msg}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+      </div>`);
+    if (ttl) setTimeout(() => {
+      const el = document.getElementById(id);
+      if (el) bootstrap.Alert.getOrCreateInstance(el).close();
+    }, ttl);
+  }
+  function showError(msg) { showAlert(msg, 'danger'); }
+
+  // Helper: escape html
+  function esc(s){ return s==null? '': String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'); }
+
+  // ================= CARGA TIPADOS Y USUARIOS =================
+  // Carga tipados y usuarios y llena selects. Devuelve promesa con objetos brutos.
+  async function loadAuxData() {
+    // fetch tipados
+    const [tipRes, userRes] = await Promise.all([
+      fetch(API_TIPADOS, { headers:{'Accept':'application/json'} }),
+      fetch(API_USUARIOS, { headers:{'Accept':'application/json'} })
+    ]);
+
+    if (!tipRes.ok) throw new Error('Error cargando tipados: ' + tipRes.status);
+    if (!userRes.ok) throw new Error('Error cargando usuarios: ' + userRes.status);
+
+    const tipadosPayload = await tipRes.json();
+    const usuariosPayload = await userRes.json();
+
+    // extraer array (soporta [] o {data:[]})
+    const tipadosArr = Array.isArray(tipadosPayload) ? tipadosPayload : (tipadosPayload.data || tipadosPayload.tipados || []);
+    const usuariosArr = Array.isArray(usuariosPayload) ? usuariosPayload : (usuariosPayload.data || usuariosPayload.usuarios || []);
+
+    return { tipados: tipadosArr, usuarios: usuariosArr };
+  }
+
+  // Llenar selects a partir de tipados. No asumimos categorías: mostramos todo y el user selecciona.
+  function fillTipadoSelects(tipados) {
+    // Build options html
+    const optHtml = tipados.map(t => `<option value="${t.id}">${esc(t.nombre ?? t.NOMBRE ?? t.codRpog ?? t.COD_RPOG ?? ('#'+t.id))}</option>`).join('');
+    selSistema.innerHTML = '<option value="">-- seleccionar --</option>' + optHtml;
+    selModulo.innerHTML = '<option value="">-- seleccionar --</option>' + optHtml;
+    selEstado.innerHTML = '<option value="">-- seleccionar --</option>' + optHtml;
+    selMotivo.innerHTML = '<option value="">-- seleccionar --</option>' + optHtml;
+  }
+
+  function fillUsuarioSelects(usuarios) {
+    const optHtml = usuarios.map(u => `<option value="${u.id}">${esc(u.usuario ?? u.USUARIO ?? (u.nombres? (u.nombres + ' ' + (u.apePat||'') ) : 'id:'+u.id))}</option>`).join('');
+    selProgramador.innerHTML = '<option value="">-- seleccionar --</option>' + optHtml;
+    selResponsable.innerHTML = '<option value="">-- seleccionar --</option>' + optHtml;
+  }
+
+  // ================= LIST REGISTROS =================
+  async function loadRegistros() {
+    registrosTbody.innerHTML = '<tr><td colspan="12" class="text-center py-4">Cargando...</td></tr>';
+    try {
+      // Ensure aux data loaded before rendering form selects
+      const aux = await loadAuxData();
+      fillTipadoSelects(aux.tipados);
+      fillUsuarioSelects(aux.usuarios);
+
+      const res = await fetch(API_REGISTROS, { headers:{'Accept':'application/json'} });
+      if (!res.ok) throw new Error('Error listando registros: ' + res.status);
+      const payload = await res.json();
+      const arr = Array.isArray(payload) ? payload : (payload.data || payload.registros || []);
+      renderRegistros(arr);
+    } catch (err) {
+      console.error(err);
+      registrosTbody.innerHTML = `<tr><td colspan="12" class="text-danger text-center py-4">No se pudo cargar registros (ver consola)</td></tr>`;
+      showError('Error cargando registros y datos auxiliares: ' + (err.message||'ver consola'));
+    }
+  }
+
+  function fmtDateLocal(isoOrEpoch) {
+    if (isoOrEpoch == null) return '';
+    // si es number -> epoch millis, si es string -> intentar parse ISO
+    const n = Number(isoOrEpoch);
+    if (!isNaN(n) && String(isoOrEpoch).length >= 10) {
+      const d = new Date(n);
+      return d.toLocaleString();
+    }
+    try {
+      const d = new Date(isoOrEpoch);
+      if (!isNaN(d)) return d.toLocaleString();
+    } catch(e){}
+    return String(isoOrEpoch);
+  }
+
+  function renderRegistros(items) {
+    if (!Array.isArray(items) || items.length === 0) {
+      registrosTbody.innerHTML = '<tr><td colspan="12" class="text-center py-4">No hay registros</td></tr>';
+      return;
+    }
+
+    registrosTbody.innerHTML = items.map(r => {
+      // safe access to nested objects
+      const sistema = r.sistema?.nombre ?? r.sistema?.NOMBRE ?? r.sistema?.codRpog ?? (r.sistemaId ?? '');
+      const modulo = r.modulo?.nombre ?? r.modulo?.NOMBRE ?? r.modulo?.codRpog ?? (r.moduloId ?? '');
+      const estado = r.estado?.nombre ?? r.estado?.NOMBRE ?? (r.estadoId ?? '');
+      const motivo = r.motivo?.nombre ?? r.motivo?.NOMBRE ?? (r.motivoId ?? '');
+      const programador = r.programador?.usuario ?? r.programador?.USUARIO ?? (r.programadorId ?? '');
+      const responsable = r.responsable?.usuario ?? r.responsable?.USUARIO ?? (r.responsableId ?? '');
+      const fechaSolicitud = fmtDateLocal(r.fechaSolicitud);
+      const fechaPase = fmtDateLocal(r.fechaPase);
+      const activo = (r.activo === 1 || r.activo === '1' || r.activo === true) ? 'Sí' : 'No';
+
+      return `<tr>
+        <td>${esc(r.id)}</td>
+        <td>${esc(sistema)}</td>
+        <td>${esc(modulo)}</td>
+        <td>${esc(r.cambio ?? '')}</td>
+        <td>${esc(programador)}</td>
+        <td>${esc(fechaSolicitud)}</td>
+        <td>${esc(estado)}</td>
+        <td>${esc(responsable)}</td>
+        <td>${esc(fechaPase)}</td>
+        <td>${esc(motivo)}</td>
+        <td>${esc(activo)}</td>
+        <td>
+          <button class="btn btn-sm btn-outline-primary me-1" onclick="openEditRegistro(${r.id})">Editar</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="confirmDeleteRegistro(${r.id})">Eliminar</button>
+        </td>
+      </tr>`; 
+    }).join('');
+  }
+
+  // ================= FORM: abrir/llenar =================
+  async function openEditRegistro(id) {
+    try {
+      // refresh aux data
+      const aux = await loadAuxData();
+      fillTipadoSelects(aux.tipados);
+      fillUsuarioSelects(aux.usuarios);
+
+      const res = await fetch(`${API_REGISTROS}/${id}`, { headers:{'Accept':'application/json'} });
+      if (!res.ok) throw new Error('Registro no encontrado: ' + res.status);
+      const r = await res.json();
+
+      inputId.value = r.id ?? '';
+      // set selects by id (support nested object or plain id fields)
+      setSelectById(selSistema, r.sistema?.id ?? r.sistemaId ?? r.sistema);
+      setSelectById(selModulo, r.modulo?.id ?? r.moduloId ?? r.modulo);
+      setSelectById(selEstado, r.estado?.id ?? r.estadoId ?? r.estado);
+      setSelectById(selMotivo, r.motivo?.id ?? r.motivoId ?? r.motivo);
+
+      setSelectById(selProgramador, r.programador?.id ?? r.programadorId ?? r.programador);
+      setSelectById(selResponsable, r.responsable?.id ?? r.responsableId ?? r.responsable);
+
+      txtCambio.value = r.cambio ?? '';
+      txtDetalleMotivo.value = r.detalleMotivo ?? '';
+
+      // fechaSolicitud: si viene ISO -> convert to input value format
+      inputFechaSolicitud.value = toDatetimeLocalValue(r.fechaSolicitud);
+      inputFechaPase.value = toDatetimeLocalValue(r.fechaPase);
+
+      selActivo.value = (r.activo === 1 || r.activo === '1' || r.activo === true) ? '1' : '0';
+
+      document.getElementById('registroModalLabel').textContent = 'Editar Registro';
+      formError.textContent = '';
+      registroModal.show();
+    } catch (err) {
+      console.error(err);
+      showError('No se pudo cargar el registro (ver consola).');
+    }
+  }
+
+  function setSelectById(selectEl, value) {
+    if (value == null) { selectEl.value = ''; return; }
+    const id = (typeof value === 'object') ? (value.id ?? '') : value;
+    selectEl.value = id;
+  }
+
+  // Helper: convert ISO or epoch -> value for datetime-local (YYYY-MM-DDTHH:mm)
+  function toDatetimeLocalValue(v) {
+    if (!v) return '';
+    let dateObj;
+    const n = Number(v);
+    if (!isNaN(n) && String(v).length >= 10) dateObj = new Date(n);
+    else dateObj = new Date(v);
+    if (isNaN(dateObj)) return '';
+    // build string like 2025-10-11T23:05
+    const pad = (n) => n.toString().padStart(2,'0');
+    const yyyy = dateObj.getFullYear();
+    const mm = pad(dateObj.getMonth()+1);
+    const dd = pad(dateObj.getDate());
+    const hh = pad(dateObj.getHours());
+    const min = pad(dateObj.getMinutes());
+    return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+  }
+
+  function openCreateForm() {
+    inputId.value = '';
+    txtCambio.value = '';
+    txtDetalleMotivo.value = '';
+    inputFechaSolicitud.value = new Date().toISOString().slice(0,16); // now
+    inputFechaPase.value = '';
+    selActivo.value = '1';
+    // load aux
+    loadAuxData().then(aux => {
+      fillTipadoSelects(aux.tipados);
+      fillUsuarioSelects(aux.usuarios);
+      registroModal.show();
+    }).catch(err => {
+      console.error(err);
+      showError('No se pudo cargar datos auxiliares para crear.');
+    });
+  }
+
+  // ================= SUBMIT (CREATE/UPDATE) =================
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    formError.textContent = '';
+
+    // validations basic
+    if (!selSistema.value || !selModulo.value || !selEstado.value || !selMotivo.value || !selProgramador.value || !selResponsable.value) {
+      formError.textContent = 'Complete los selects obligatorios.';
+      return;
+    }
+    if (!txtCambio.value.trim()) { formError.textContent = 'La descripción del cambio es obligatoria.'; return; }
+    if (!inputFechaSolicitud.value) { formError.textContent = 'Fecha de solicitud requerida.'; return; }
+
+    // Build payload: nested objects with id (backend expects Registro with nested Tipado/Usuario)
+    const payload = {
+      sistema: { id: Number(selSistema.value) },
+      modulo: { id: Number(selModulo.value) },
+      cambio: txtCambio.value.trim(),
+      programador: { id: Number(selProgramador.value) },
+      fechaSolicitud: inputFechaSolicitud.value ? (new Date(inputFechaSolicitud.value).toISOString()) : null,
+      estado: { id: Number(selEstado.value) },
+      responsable: { id: Number(selResponsable.value) },
+      fechaPase: inputFechaPase.value ? (new Date(inputFechaPase.value).getTime()) : null, // epoch millis (registro.fechaPase mapped to Long)
+      motivo: { id: Number(selMotivo.value) },
+      detalleMotivo: txtDetalleMotivo.value?.trim() || null,
+      activo: Number(selActivo.value) // 1 or 0
+    };
+
+    try {
+      if (inputId.value) {
+        // update
+        const id = inputId.value;
+        const res = await fetch(`${API_REGISTROS}/${id}`, {
+          method: 'PUT',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error('Error guardando: ' + res.status + ' ' + txt);
+        }
+        await res.json();
+        showAlert('Registro actualizado.');
+      } else {
+        // create
+        const res = await fetch(API_REGISTROS, {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error('Error creando: ' + res.status + ' ' + txt);
+        }
+        await res.json();
+        showAlert('Registro creado.');
+      }
+      registroModal.hide();
+      loadRegistros();
+    } catch (err) {
+      console.error(err);
+      formError.textContent = 'Error al guardar: ' + (err.message||'ver consola');
+    }
+  });
+
+  // ================= DELETE =================
+  window.confirmDeleteRegistro = function(id) {
+    if (!confirm('Eliminar registro id=' + id + '?')) return;
+    deleteRegistro(id);
+  };
+
+  async function deleteRegistro(id) {
+    try {
+      const res = await fetch(`${API_REGISTROS}/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error('Error eliminando: ' + res.status + ' ' + txt);
+      }
+      showAlert('Registro eliminado.');
+      loadRegistros();
+    } catch (err) {
+      console.error(err);
+      showError('No se pudo eliminar el registro. Ver consola.');
+    }
+  }
+
+  // Inicial load
+  loadRegistros();
+
+  // Exponer para botones inline
+  window.openEditRegistro = openEditRegistro;
+});
+</script>
+</body>
+</html>

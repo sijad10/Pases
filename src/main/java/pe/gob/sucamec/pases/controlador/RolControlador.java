@@ -13,7 +13,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/roles")
-@CrossOrigin(origins = "http://localhost:4200")
+@CrossOrigin(origins = "*")
 public class RolControlador {
 
     private static final Logger logger = LoggerFactory.getLogger(RolControlador.class);

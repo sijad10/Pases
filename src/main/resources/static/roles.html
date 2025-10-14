@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Roles — PASES</title>
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <style>
+    body { padding-top: 1.2rem; }
+    .modal { z-index: 2000; }
+  </style>
+</head>
+<body class="bg-gray-50">
+<div class="container">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h1 class="h3">Roles — Sistema PASES</h1>
+    <div>
+      <button id="btnRefresh" class="btn btn-outline-secondary me-2">Refrescar</button>
+      <button id="btnNuevo" class="btn btn-primary">Nuevo Rol</button>
+    </div>
+  </div>
+
+  <div id="alerts"></div>
+
+  <div class="card shadow-sm">
+    <div class="card-body p-0">
+      <table class="table table-striped mb-0" id="rolesTable">
+        <thead class="table-light">
+          <tr>
+            <th>ID</th>
+            <th>Usuario</th>
+            <th>Perfil</th>
+            <th>Activo</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="rolesTbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Crear/Editar Rol -->
+<div class="modal fade" id="rolModal" tabindex="-1" aria-labelledby="rolModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <form id="rolForm" class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="rolModalLabel">Nuevo Rol</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="rolId" />
+        <div class="mb-3">
+          <label for="selUsuario" class="form-label">Usuario</label>
+          <select id="selUsuario" class="form-select" required></select>
+        </div>
+        <div class="mb-3">
+          <label for="selPerfil" class="form-label">Perfil (Tipado)</label>
+          <select id="selPerfil" class="form-select" required></select>
+        </div>
+        <div class="mb-3 form-check">
+          <input id="chkActivo" type="checkbox" class="form-check-input" />
+          <label class="form-check-label" for="chkActivo">Activo</label>
+        </div>
+        <div id="formError" class="text-danger small"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="submit" id="btnGuardarRol" class="btn btn-primary">Guardar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+/*
+  Versión robusta de roles.html
+  - Asegúrate de servir este archivo desde el mismo origen que el backend (preferible).
+  - Comprueba Network/Console si algo falla.
+*/
+
+document.addEventListener('DOMContentLoaded', () => {
+  const API_ROLES = '/roles';
+  const API_USU = '/usuarios';
+  const API_TIP = '/tipados';
+
+  // Elementos
+  const rolesTbody = document.getElementById('rolesTbody');
+  const alerts = document.getElementById('alerts');
+  const btnNuevo = document.getElementById('btnNuevo');
+  const btnRefresh = document.getElementById('btnRefresh');
+  const rolForm = document.getElementById('rolForm');
+  const inputId = document.getElementById('rolId');
+  const selUsuario = document.getElementById('selUsuario');
+  const selPerfil = document.getElementById('selPerfil');
+  const chkActivo = document.getElementById('chkActivo');
+  const formError = document.getElementById('formError');
+  const rolModal = new bootstrap.Modal(document.getElementById('rolModal'));
+
+  // caches
+  let usuariosCache = [];
+  let perfilesCache = [];
+
+  // helpers UI
+  function showAlert(msg, type='success', timeout=3500) {
+    const id = 'a' + Date.now();
+    alerts.insertAdjacentHTML('beforeend', `
+      <div id="${id}" class="alert alert-${type} alert-dismissible fade show" role="alert">
+        ${msg}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+      </div>`);
+    if (timeout) setTimeout(()=>{ const el=document.getElementById(id); if(el) bootstrap.Alert.getOrCreateInstance(el).close(); }, timeout);
+  }
+  function showError(msg){ showAlert(msg, 'danger'); }
+
+  function escapeHtml(text) {
+    if (text === null || text === undefined) return '';
+    return String(text).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
+  }
+
+  // normalize helpers
+  function normalizeUsuario(u) {
+    if (!u) return null;
+    return {
+      id: u.id ?? u.ID ?? (u.usuario ? (u.id ?? null) : null),
+      label: u.usuario ?? u.USUARIO ?? `${u.nombres ?? ''} ${u.apePat ?? ''}`.trim() || (u.id ?? '')
+    };
+  }
+  function normalizeTipado(t) {
+    if (!t) return null;
+    return {
+      id: t.id ?? t.ID,
+      label: t.nombre ?? t.NOMBRE ?? t.codRpog ?? t.COD_RPOG ?? String(t.id)
+    };
+  }
+
+  // extract flexible array
+  function extractArray(payload) {
+    if (!payload) return [];
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload.data)) return payload.data;
+    if (Array.isArray(payload.usuarios)) return payload.usuarios;
+    if (Array.isArray(payload.tipados)) return payload.tipados;
+    if (Array.isArray(payload.result)) return payload.result;
+    // find first array
+    for (const k of Object.keys(payload)) if (Array.isArray(payload[k])) return payload[k];
+    return [];
+  }
+
+  function populateSelect(sel, items, placeholder) {
+    sel.innerHTML = '';
+    if (placeholder) sel.insertAdjacentHTML('beforeend', `<option value="">-- ${placeholder} --</option>`);
+    items.forEach(i => sel.insertAdjacentHTML('beforeend', `<option value="${i.id}">${escapeHtml(i.label)}</option>`));
+  }
+
+  // CARGA AUX (usuarios y tipados) - obligatorio antes de abrir modal
+  async function loadAux() {
+    console.debug('loadAux: fetching usuarios & tipados');
+    try {
+      const [ru, rt] = await Promise.all([
+        fetch(API_USU, { headers: {'Accept':'application/json'} }),
+        fetch(API_TIP, { headers: {'Accept':'application/json'} })
+      ]);
+
+      if (!ru.ok) throw new Error('Usuarios HTTP ' + ru.status);
+      if (!rt.ok) throw new Error('Tipados HTTP ' + rt.status);
+
+      const pu = await ru.json();
+      const pt = await rt.json();
+
+      usuariosCache = extractArray(pu).map(normalizeUsuario);
+      perfilesCache = extractArray(pt).map(normalizeTipado);
+
+      if (usuariosCache.length === 0) {
+        populateSelect(selUsuario, [], 'No hay usuarios');
+      } else {
+        populateSelect(selUsuario, usuariosCache, 'Seleccione usuario');
+      }
+
+      if (perfilesCache.length === 0) {
+        populateSelect(selPerfil, [], 'No hay perfiles');
+      } else {
+        populateSelect(selPerfil, perfilesCache, 'Seleccione perfil');
+      }
+
+      console.debug('loadAux: usuarios=', usuariosCache.length, 'perfiles=', perfilesCache.length);
+    } catch (err) {
+      console.error('loadAux error', err);
+      showError('Error cargando usuarios/perfiles. Revisa backend o CORS. Ver consola.');
+      // set fallback options so modal can still open
+      selUsuario.innerHTML = '<option value="">-- Error cargando usuarios --</option>';
+      selPerfil.innerHTML = '<option value="">-- Error cargando perfiles --</option>';
+    }
+  }
+
+  // CARGA ROLES
+  async function loadRoles() {
+    rolesTbody.innerHTML = '<tr><td colspan="5" class="text-center py-3">Cargando...</td></tr>';
+    try {
+      const res = await fetch(API_ROLES, { headers: {'Accept':'application/json'} });
+      console.debug('GET', API_ROLES, 'status', res.status);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const payload = await res.json();
+      const rows = extractArray(payload);
+      renderTable(rows);
+    } catch (err) {
+      console.error('loadRoles error', err);
+      rolesTbody.innerHTML = '<tr><td colspan="5" class="text-danger text-center py-3">No se pudo cargar roles</td></tr>';
+      showError('No se pudieron cargar roles. Revisa backend o la consola.');
+    }
+  }
+
+  function renderTable(rows) {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      rolesTbody.innerHTML = '<tr><td colspan="5" class="text-center py-3">No hay roles</td></tr>';
+      return;
+    }
+    rolesTbody.innerHTML = rows.map(r => {
+      const id = r.id ?? r.ID ?? '';
+      // support nested objects or id fields
+      const usuarioObj = r.usuario ?? r.usuarioId ?? r.USUARIO ?? r.USUARIO_ID ?? null;
+      const perfilObj = r.perfil ?? r.perfilId ?? r.PERFIL ?? r.PERFIL_ID ?? null;
+      const usuarioLabel = (typeof usuarioObj === 'object') ? (usuarioObj.usuario ?? usuarioObj.nombres ?? usuarioObj.label ?? usuarioObj.id) : usuarioObj;
+      const perfilLabel = (typeof perfilObj === 'object') ? (perfilObj.nombre ?? perfilObj.codRpog ?? perfilObj.label ?? perfilObj.id) : perfilObj;
+      const activo = r.activo ?? r.ACTIVO ?? false;
+      const activoText = activo === 1 || activo === '1' || activo === true ? 'Sí' : 'No';
+      return `<tr>
+        <td>${escapeHtml(id)}</td>
+        <td>${escapeHtml(usuarioLabel ?? '')}</td>
+        <td>${escapeHtml(perfilLabel ?? '')}</td>
+        <td>${escapeHtml(activoText)}</td>
+        <td>
+          <button class="btn btn-sm btn-outline-primary me-1" onclick="openEditRol(${id})">Editar</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="confirmDeleteRol(${id})">Eliminar</button>
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  // ABRIR EDICIÓN
+  async function openEditRol(id) {
+    try {
+      console.debug('openEditRol', id);
+      const res = await fetch(`${API_ROLES}/${id}`, { headers: {'Accept':'application/json'} });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const raw = await res.json();
+      const r = Array.isArray(raw) ? raw[0] : raw;
+      fillForm(r);
+      document.getElementById('rolModalLabel').textContent = 'Editar Rol';
+      rolModal.show();
+    } catch (err) {
+      console.error('openEditRol error', err);
+      showError('No se pudo cargar el rol. Ver consola.');
+    }
+  }
+
+  function fillForm(r) {
+    inputId.value = r.id ?? r.ID ?? '';
+    const usuarioId = r.usuario?.id ?? r.usuarioId ?? r.USUARIO_ID ?? (r.usuario ?? '');
+    const perfilId = r.perfil?.id ?? r.perfilId ?? r.PERFIL_ID ?? (r.perfil ?? '');
+    // set selects only if option exists; otherwise keep current selection (safe)
+    if (selUsuario.querySelector(`option[value="${usuarioId}"]`)) selUsuario.value = usuarioId;
+    if (selPerfil.querySelector(`option[value="${perfilId}"]`)) selPerfil.value = perfilId;
+    const activoVal = r.activo ?? r.ACTIVO ?? false;
+    chkActivo.checked = (activoVal === 1 || activoVal === '1' || activoVal === true);
+    formError.textContent = '';
+  }
+
+  // ABRIR CREAR (asegura selects cargados)
+  function openCreateForm() {
+    // if selects empty, inform user
+    if ((selUsuario.options.length === 0) || (selPerfil.options.length === 0)) {
+      showError('No hay usuarios o perfiles cargados. Refresca y vuelve a intentar.');
+      return;
+    }
+    inputId.value = '';
+    // elegir primer valor válido (salta placeholder)
+    if (selUsuario.options.length > 0) selUsuario.selectedIndex = selUsuario.options[0].value === '' && selUsuario.options.length>1 ? 1 : 0;
+    if (selPerfil.options.length > 0) selPerfil.selectedIndex = selPerfil.options[0].value === '' && selPerfil.options.length>1 ? 1 : 0;
+    chkActivo.checked = true;
+    formError.textContent = '';
+    document.getElementById('rolModalLabel').textContent = 'Nuevo Rol';
+    rolModal.show();
+  }
+
+  // GUARDAR (POST o PUT)
+  async function saveRol(ev) {
+    ev.preventDefault();
+    formError.textContent = '';
+    if (!selUsuario.value) { formError.textContent = 'Selecciona un usuario.'; return; }
+    if (!selPerfil.value) { formError.textContent = 'Selecciona un perfil.'; return; }
+
+    const payload = {
+      usuario: { id: Number(selUsuario.value) },
+      perfil: { id: Number(selPerfil.value) },
+      activo: chkActivo.checked ? 1 : 0
+    };
+
+    try {
+      if (inputId.value) {
+        const id = inputId.value;
+        const res = await fetch(`${API_ROLES}/${id}`, {
+          method: 'PUT',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error('HTTP ' + res.status + ' - ' + txt);
+        }
+        await res.json();
+        showAlert('Rol actualizado.');
+      } else {
+        const res = await fetch(API_ROLES, {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error('HTTP ' + res.status + ' - ' + txt);
+        }
+        await res.json();
+        showAlert('Rol creado.');
+      }
+      rolModal.hide();
+      await loadRoles();
+    } catch (err) {
+      console.error('saveRol error', err);
+      formError.textContent = 'Error: ' + (err.message || 'Ver consola');
+    }
+  }
+
+  function confirmDeleteRol(id) {
+    if (!confirm(`Eliminar rol id=${id}?`)) return;
+    deleteRol(id);
+  }
+
+  async function deleteRol(id) {
+    try {
+      const res = await fetch(`${API_ROLES}/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error('HTTP ' + res.status + ' - ' + t);
+      }
+      showAlert('Rol eliminado.');
+      await loadRoles();
+    } catch (err) {
+      console.error('deleteRol error', err);
+      showError('No se pudo eliminar. Ver consola.');
+    }
+  }
+
+  // event listeners
+  btnNuevo.addEventListener('click', async () => {
+    // ensure aux data loaded and then open modal
+    if (usuariosCache.length === 0 || perfilesCache.length === 0) {
+      await loadAux(); // attempt reload
+    }
+    openCreateForm();
+  });
+  btnRefresh.addEventListener('click', async () => {
+    await loadAux();
+    await loadRoles();
+  });
+  rolForm.addEventListener('submit', saveRol);
+
+  // Expose to global so inline onclick in table works
+  window.openEditRol = openEditRol;
+  window.confirmDeleteRol = confirmDeleteRol;
+
+  // inicial
+  (async function init() {
+    console.debug('roles.init');
+    await loadAux();
+    await loadRoles();
+  })();
+
+}); // DOMContentLoaded
+</script>
+</body>
+</html>

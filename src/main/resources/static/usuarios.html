@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Gestión de Usuarios - PASES</title>
+
+    <!-- Bootstrap 5 CSS (CDN) -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Tailwind Play CDN (utilidades rápidas) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+        body { padding-top: 1.5rem; }
+        .table-row-pointer { cursor: pointer; }
+        .modal { z-index: 2000; }
+    </style>
+</head>
+<body class="bg-gray-50">
+
+<div class="container">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1 class="h3">Usuarios — Sistema PASES</h1>
+        <div>
+            <button id="btnRefresh" class="btn btn-outline-secondary me-2">Refrescar</button>
+            <button id="btnNuevo" class="btn btn-primary">Nuevo Usuario</button>
+        </div>
+    </div>
+
+    <div id="alerts"></div>
+
+    <div class="card shadow-sm">
+        <div class="card-body p-0">
+            <table class="table table-striped mb-0" id="usuariosTable">
+                <thead class="table-light">
+                <tr>
+                    <th>ID</th>
+                    <th>Usuario</th>
+                    <th>Nombres</th>
+                    <th>Apellido Paterno</th>
+                    <th>Apellido Materno</th>
+                    <th>Activo</th>
+                    <th>Acciones</th>
+                </tr>
+                </thead>
+                <tbody id="usuariosTbody">
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Modal -->
+<div class="modal fade" id="usuarioModal" tabindex="-1" aria-labelledby="usuarioModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <form id="usuarioForm" class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="usuarioModalLabel">Nuevo Usuario</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="usuarioId" />
+
+                <div class="mb-3">
+                    <label for="usuarioUsuario" class="form-label">Usuario (login)</label>
+                    <input id="usuarioUsuario" class="form-control" required maxlength="20" />
+                </div>
+
+                <div class="mb-3">
+                    <label for="usuarioNombres" class="form-label">Nombres</label>
+                    <input id="usuarioNombres" class="form-control" required maxlength="20" />
+                </div>
+
+                <div class="mb-3">
+                    <label for="usuarioApePat" class="form-label">Apellido Paterno</label>
+                    <input id="usuarioApePat" class="form-control" required maxlength="20" />
+                </div>
+
+                <div class="mb-3">
+                    <label for="usuarioApeMat" class="form-label">Apellido Materno</label>
+                    <input id="usuarioApeMat" class="form-control" required maxlength="20" />
+                </div>
+
+                <div class="mb-3 form-check">
+                    <input type="checkbox" class="form-check-input" id="usuarioActivo" />
+                    <label class="form-check-label" for="usuarioActivo">Activo</label>
+                </div>
+
+                <div id="formError" class="text-danger small"></div>
+            </div>
+
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-primary" id="btnGuardar">Guardar</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Bootstrap JS (bundle incluye Popper) -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+      // ====== CONFIG ======
+      // Si tu HTML se sirve desde el mismo backend, usa la ruta relativa:
+      const API_URL = '/usuarios'; // <<-- importante: relativa evita CORS si estás en el mismo origen
+
+      // Modal de Bootstrap (inicializado después de DOMContentLoaded)
+      const usuarioModalEl = document.getElementById('usuarioModal');
+      const usuarioModal = new bootstrap.Modal(usuarioModalEl);
+
+      // Elementos
+      const usuariosTbody = document.getElementById('usuariosTbody');
+      const alerts = document.getElementById('alerts');
+
+      const form = document.getElementById('usuarioForm');
+      const inputId = document.getElementById('usuarioId');
+      const inputUsuario = document.getElementById('usuarioUsuario');
+      const inputNombres = document.getElementById('usuarioNombres');
+      const inputApePat = document.getElementById('usuarioApePat');
+      const inputApeMat = document.getElementById('usuarioApeMat');
+      const inputActivo = document.getElementById('usuarioActivo');
+      const formError = document.getElementById('formError');
+
+      // Botones
+      document.getElementById('btnNuevo').addEventListener('click', openCreateForm);
+      document.getElementById('btnRefresh').addEventListener('click', loadUsers);
+
+      // UTIL
+      function showAlert(message, type = 'success', timeout = 4000) {
+        const id = 'a' + Date.now();
+        alerts.insertAdjacentHTML('beforeend', `
+          <div id="${id}" class="alert alert-${type} alert-dismissible fade show" role="alert">
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+          </div>`);
+        if (timeout) setTimeout(() => {
+          const el = document.getElementById(id);
+          if (el) bootstrap.Alert.getOrCreateInstance(el).close();
+        }, timeout);
+      }
+      function showError(message) { showAlert(message, 'danger'); }
+
+      // Normaliza una entidad recibida desde backend para usar campos JS esperados
+      function normalizeUser(u) {
+        if (!u) return null;
+        // reconoce varias convenciones de nombres
+        const usuario = u.usuario ?? u.USUARIO ?? u.user ?? u.username;
+        const nombres = u.nombres ?? u.NOMBRES ?? u.name ?? u.fullName;
+        const apePat = u.apePat ?? u.ape_pat ?? u.APE_PAT ?? u.apellidoPaterno;
+        const apeMat = u.apeMat ?? u.ape_mat ?? u.APE_MAT ?? u.apellidoMaterno;
+        // activo puede venir como booleano, 0/1 o '1'
+        let activo = u.activo ?? u.ACTIVO ?? u.active ?? u.ACT;
+        if (activo === 1 || activo === '1') activo = true;
+        else if (activo === 0 || activo === '0') activo = false;
+        else activo = Boolean(activo);
+        const id = u.id ?? u.ID ?? u.usuarioId ?? null;
+        return { id, usuario, nombres, apePat, apeMat, activo };
+      }
+
+      // extrae array de respuesta (soporta [..] o { data: [...] } u otros)
+      function extractArray(payload) {
+        if (!payload) return [];
+        if (Array.isArray(payload)) return payload;
+        if (Array.isArray(payload.data)) return payload.data;
+        if (Array.isArray(payload.usuarios)) return payload.usuarios;
+        if (Array.isArray(payload.result)) return payload.result;
+        // último recurso: buscar primer array dentro del objeto
+        for (const k of Object.keys(payload)) {
+          if (Array.isArray(payload[k])) return payload[k];
+        }
+        return [];
+      }
+
+      // CRUD
+      async function loadUsers() {
+        usuariosTbody.innerHTML = '<tr><td colspan="7" class="text-center py-4">Cargando...</td></tr>';
+        try {
+          const res = await fetch(API_URL, { headers: { 'Accept': 'application/json' } });
+          console.debug('GET', API_URL, 'status', res.status);
+          if (!res.ok) throw new Error('Error al obtener usuarios: ' + res.status);
+          const payload = await res.json();
+          const rawArray = extractArray(payload);
+          const users = rawArray.map(normalizeUser);
+          console.debug('usuarios recibidos', users.length);
+          renderTable(users);
+        } catch (err) {
+          usuariosTbody.innerHTML = `<tr><td colspan="7" class="text-danger text-center py-4">No se pudo cargar (ver consola)</td></tr>`;
+          console.error(err);
+          showError('No se pudo conectar al servidor. Revisa CORS y que el backend esté corriendo en /usuarios');
+        }
+      }
+
+      function renderTable(users) {
+        if (!Array.isArray(users) || users.length === 0) {
+          usuariosTbody.innerHTML = '<tr><td colspan="7" class="text-center py-4">No hay usuarios</td></tr>';
+          return;
+        }
+
+        usuariosTbody.innerHTML = users.map(u => `
+          <tr>
+            <td>${escapeHtml(u.id ?? '')}</td>
+            <td>${escapeHtml(u.usuario ?? '')}</td>
+            <td>${escapeHtml(u.nombres ?? '')}</td>
+            <td>${escapeHtml(u.apePat ?? '')}</td>
+            <td>${escapeHtml(u.apeMat ?? '')}</td>
+            <td>${u.activo ? 'Sí' : 'No'}</td>
+            <td>
+              <button class="btn btn-sm btn-outline-primary me-1" onclick="openEditForm(${u.id})">Editar</button>
+              <button class="btn btn-sm btn-outline-danger" onclick="confirmDelete(${u.id}, '${escapeHtml(u.usuario ?? '')}')">Eliminar</button>
+            </td>
+          </tr>
+        `).join('');
+      }
+
+      async function openEditForm(id) {
+        try {
+          const res = await fetch(`${API_URL}/${id}`, { headers: { 'Accept': 'application/json' } });
+          if (!res.ok) throw new Error('No encontrado: ' + res.status);
+          const raw = await res.json();
+          const u = normalizeUser(raw);
+          inputId.value = u.id ?? '';
+          inputUsuario.value = u.usuario ?? '';
+          inputNombres.value = u.nombres ?? '';
+          inputApePat.value = u.apePat ?? '';
+          inputApeMat.value = u.apeMat ?? '';
+          inputActivo.checked = !!u.activo;
+          formError.textContent = '';
+          document.getElementById('usuarioModalLabel').textContent = 'Editar Usuario';
+          usuarioModal.show();
+        } catch (err) {
+          console.error(err);
+          showError('No se pudo cargar el usuario para editar.');
+        }
+      }
+
+      function openCreateForm() {
+        inputId.value = '';
+        inputUsuario.value = '';
+        inputNombres.value = '';
+        inputApePat.value = '';
+        inputApeMat.value = '';
+        inputActivo.checked = true;
+        formError.textContent = '';
+        document.getElementById('usuarioModalLabel').textContent = 'Nuevo Usuario';
+        usuarioModal.show();
+      }
+
+      form.addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        formError.textContent = '';
+
+        const payload = {
+          usuario: inputUsuario.value.trim(),
+          nombres: inputNombres.value.trim(),
+          apePat: inputApePat.value.trim(),
+          apeMat: inputApeMat.value.trim(),
+          activo: inputActivo.checked
+        };
+
+        if (!payload.usuario || !payload.nombres || !payload.apePat || !payload.apeMat) {
+          formError.textContent = 'Completa todos los campos obligatorios.';
+          return;
+        }
+
+        try {
+          if (inputId.value) {
+            const id = inputId.value;
+            const res = await fetch(`${API_URL}/${id}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+              const txt = await res.text();
+              throw new Error('Error guardando: ' + res.status + ' ' + txt);
+            }
+            await res.json();
+            showAlert('Usuario actualizado correctamente.');
+          } else {
+            const res = await fetch(API_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+              const txt = await res.text();
+              throw new Error('Error creando: ' + res.status + ' ' + txt);
+            }
+            await res.json();
+            showAlert('Usuario creado correctamente.');
+          }
+          usuarioModal.hide();
+          loadUsers();
+        } catch (err) {
+          console.error(err);
+          formError.textContent = 'Error al guardar: ' + (err.message || 'Ver consola');
+        }
+      });
+
+      function confirmDelete(id, usuarioName) {
+        if (!confirm(`Eliminar usuario "${usuarioName}" (id=${id})?`)) return;
+        deleteUser(id);
+      }
+
+      async function deleteUser(id) {
+        try {
+          const res = await fetch(`${API_URL}/${id}`, { method: 'DELETE' });
+          if (!res.ok) {
+            const txt = await res.text();
+            throw new Error('Error eliminando: ' + res.status + ' ' + txt);
+          }
+          showAlert('Usuario eliminado.');
+          loadUsers();
+        } catch (err) {
+          console.error(err);
+          showError('No se pudo eliminar el usuario. Ver consola.');
+        }
+      }
+
+      function escapeHtml(text) {
+        if (!text && text !== 0) return '';
+        return String(text).replaceAll('&', '&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
+      }
+
+      // Inicial load
+      loadUsers();
+
+      // Exponer funciones globales para botones inline
+      window.openEditForm = openEditForm;
+      window.confirmDelete = confirmDelete;
+    });
+</script>
+</body>
+</html>

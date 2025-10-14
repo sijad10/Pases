@@ -14,7 +14,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/tipados")
-@CrossOrigin(origins = "http://localhost:4200")
+@CrossOrigin(origins = "*")
 public class TipadoControlador {
 
     private static final Logger logger = LoggerFactory.getLogger(TipadoControlador.class);
